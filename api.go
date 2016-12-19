@@ -4,11 +4,12 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+	"net/http"
 )
 
 var (
 	// Version of VK API
-	Version = "5.12"
+	Version = "5.60"
 	// APIURL is a base to make API calls
 	APIURL = "https://api.vk.com/method/"
 	// HTTPS defines if use https instead of http. 1 - use https. 0 - use http
@@ -27,8 +28,15 @@ type API struct {
 	callbackURL     *url.URL
 	requestTokenURL *url.URL
 	accessTokenURL  *url.URL
+	httpClient *http.Client
 }
 
+func NewApiWithAccessToken(httpClient *http.Client, accessToken string) *API {
+	return &API{
+		httpClient: httpClient,
+		AccessToken: accessToken,
+	}
+}
 // NewAPI creates instance of API
 func NewAPI(appID, secret string, scope []string, callback string) *API {
 	var err error

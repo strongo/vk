@@ -2,9 +2,14 @@ package vk
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
+	"strconv"
+	"fmt"
+	"golang.org/x/net/context"
+	"io/ioutil"
+	"google.golang.org/appengine/log"
+	"github.com/pkg/errors"
 )
 
 var (
@@ -12,27 +17,52 @@ var (
 	NameCases = []string{"nom", "gen", "dat", "acc", "ins", "abl"}
 )
 
+const (
+	FieldFirstName = "first_name"
+	FieldLastName = "last_name"
+	FieldScreenName = "screen_name"
+	FieldNickname = "nickname"
+)
+
 type (
+
+	VkError interface {
+		VkErrorCode() int
+	}
+
+	RequestParam struct {
+		Key string `json:"key"`
+		Value string `json:"value"`
+	}
+
+	vkError struct {
+		Code    int `json:"error_code"`
+		Message string `json:"error_msg"`
+		RequestParams []RequestParam `json:"request_params"`
+	}
+
 	// Response from users.get
 	Response struct {
-		Response []UserInfo
+		Error *vkError `json:"error"`
+		Response []UserInfo `json:"response"`
 	}
+
 	// UserInfo contains user information
 	// TODO improve fields list from here: http://vk.com/dev/fields
 	UserInfo struct {
-		ID                     int          `json:"id"`
-		FirstName              string       `json:"first_name"`
-		LastName               string       `json:"last_name"`
-		ScreenName             string       `json:"screen_name"`
-		NickName               string       `json:"nickname"`
-		Sex                    int          `json:"sex,omitempty"`
-		Domain                 string       `json:"domain,omitempty"`
-		Birthdate              string       `json:"bdate,omitempty"`
-		City                   GeoPlace     `json:"city,omitempty"`
-		Country                GeoPlace     `json:"country,omitempty"`
-		Photo50                string       `json:"photo_50,omitempty"`
-		Photo100               string       `json:"photo_100,omitempty"`
-		Photo200               string       `json:"photo_200,omitempty"`
+		ID         int          `json:"id"`
+		FirstName  string       `json:"first_name"`
+		LastName   string       `json:"last_name"`
+		ScreenName string       `json:"screen_name"`
+		Nickname   string       `json:"nickname"`
+		Sex        int          `json:"sex,omitempty"`
+		Domain     string       `json:"domain,omitempty"`
+		Birthdate  string       `json:"bdate,omitempty"`
+		City       GeoPlace     `json:"city,omitempty"`
+		Country    GeoPlace     `json:"country,omitempty"`
+		Photo50    string       `json:"photo_50,omitempty"`
+		Photo100   string       `json:"photo_100,omitempty"`
+		Photo200   string       `json:"photo_200,omitempty"`
 		PhotoMax               string       `json:"photo_max,omitempty"`
 		Photo200Orig           string       `json:"photo_200_orig,omitempty"`
 		PhotoMaxOrig           string       `json:"photo_max_orig,omitempty"`
@@ -100,6 +130,24 @@ type (
 	}
 )
 
+func (err vkError) Error() string {
+	return fmt.Sprintf("Code=%v, len(request_params)=%v, %v", err.Code, len(err.RequestParams), err.Message)
+}
+
+func (err vkError) VkErrorCode() int {
+	return err.Code
+}
+
+func (api *API) GetUserByIntID(c context.Context, userID int64, nameCase string, fields ...string) (UserInfo, error) {
+	if users, err := api.UsersGet(c, []string{strconv.FormatInt(userID, 10)}, fields, nameCase); err != nil {
+		return UserInfo{}, err
+	} else if len(users) != 1 {
+			panic(fmt.Sprintf("len(users):%v != 1", len(users)))
+	} else {
+		return users[0], nil
+	}
+}
+
 // UsersGet implements method http://vk.com/dev/users.get
 //
 //     userIds - no more than 1000, use `user_id` or `screen_name`
@@ -112,7 +160,7 @@ type (
 //     name_case - choose one of nom, gen, dat, acc, ins, abl.
 //     nom is default
 //
-func (api *API) UsersGet(userIds []string, fields []string, nameCase string) ([]UserInfo, error) {
+func (api *API) UsersGet(c context.Context, userIds []string, fields []string, nameCase string) ([]UserInfo, error) {
 	if len(userIds) == 0 {
 		return nil, errors.New("you must pass at least one id or screen_name")
 	}
@@ -123,21 +171,44 @@ func (api *API) UsersGet(userIds []string, fields []string, nameCase string) ([]
 	endpoint := api.getAPIURL("users.get")
 	query := endpoint.Query()
 	query.Set("user_ids", strings.Join(userIds, ","))
-	query.Set("fields", strings.Join(fields, ","))
-	query.Set("name_case", nameCase)
+
+	if len(fields) > 0 {
+		fieldsStr := strings.Join(fields, ",")
+		log.Debugf(c, "VK fields: "+fieldsStr)
+		query.Set("fields", fieldsStr)
+	}
+	if nameCase != "" {
+		query.Set("name_case", nameCase)
+	}
+
 	endpoint.RawQuery = query.Encode()
 
 	var err error
 	var resp *http.Response
 	var response Response
 
-	if resp, err = http.Get(endpoint.String()); err != nil {
+	httpClient := api.httpClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	url := endpoint.String()
+	log.Debugf(c, "url: %v", url)
+	if resp, err = httpClient.Get(url); err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	if err = json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, err
+	responseBody, err := ioutil.ReadAll(resp.Body)
+
+	log.Debugf(c, "VK response(status=%v) body: %v", resp.StatusCode, string(responseBody))
+
+	if err = json.Unmarshal(responseBody, &response); err != nil {
+		return nil, errors.Wrap(err, "Failed to unmarshal VK response")
 	}
-	return response.Response, nil
+	log.Debugf(c, "Unmarshalled VK response: %v", response)
+	if response.Error != nil {
+		err = response.Error
+		log.Debugf(c, "VK API returned error - pass it upstream: %v", err)
+	}
+	return response.Response, err
 }
