@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"golang.org/x/net/context"
 	"io/ioutil"
-	"google.golang.org/appengine/log"
+	"github.com/strongo/app/log"
 	"github.com/pkg/errors"
 )
 
