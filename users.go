@@ -6,9 +6,9 @@ import (
 	"strings"
 	"strconv"
 	"fmt"
-	"golang.org/x/net/context"
+	"context"
 	"io/ioutil"
-	"github.com/strongo/app/log"
+	"github.com/strongo/log"
 	"github.com/pkg/errors"
 )
 
